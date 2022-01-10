@@ -1,0 +1,119 @@
+import os, zipfile
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import tensorflow as tf
+from sklearn.model_selection import train_test_split
+from matplotlib import image
+from tensorflow import keras
+from tensorflow.keras import layers
+from tensorflow.keras.models import Sequential
+from keras.preprocessing.image import ImageDataGenerator
+from keras.models import Sequential
+from keras.layers import Dense, Dropout, Flatten, Conv2D, MaxPool2D, BatchNormalization, AveragePooling2D
+from keras.optimizers import RMSprop, SGD
+import matplotlib.pyplot as plt
+from PIL import Image
+
+for dirname, _, filenames in os.walk('/kaggle/input'):
+    for filename in filenames:
+        print(os.path.join(dirname, filename))    
+        COMPETITION_DIR = '/kaggle/output/street-view-getting-started-with-julia'
+TRAIN_CSV_PATH = '/kaggle/input/street-view-getting-started-with-julia/trainLabels.csv'
+TRAIN_IMGS_BASE_PATH = '/kaggle/output/street-view-getting-started-with-julia/trainResized/'
+TEST_IMGS_BASE_PATH = '/kaggle/output/street-view-getting-started-with-julia/testResized/'
+TRAIN_IMGS_ZIP_PATH = '/kaggle/input/street-view-getting-started-with-julia/trainResized.zip'
+TEST_IMGS_ZIP_PATH = '/kaggle/input/street-view-getting-started-with-julia/testResized.zip'
+
+if not os.path.exists(TRAIN_IMGS_BASE_PATH):
+    os.makedirs(TRAIN_IMGS_BASE_PATH)
+zip_ref = zipfile.ZipFile(TRAIN_IMGS_ZIP_PATH)
+zip_ref.extractall(COMPETITION_DIR)
+zip_ref.close()
+
+if not os.path.exists(TEST_IMGS_BASE_PATH):
+    os.makedirs(TEST_IMGS_BASE_PATH)
+zip_ref = zipfile.ZipFile(TEST_IMGS_ZIP_PATH)
+zip_ref.extractall(COMPETITION_DIR)
+zip_ref.close()
+
+train_data_source = pd.read_csv(TRAIN_CSV_PATH)
+LABELS = train_data_source['Class']
+UNIQUE_LABELS = list(set(LABELS))
+LABEL_IDX = [UNIQUE_LABELS.index(l) for l in LABELS]
+unique_labels_count = len(list(set(LABELS)))
+LABEL_IDX = np.array(LABEL_IDX, dtype=np.float32)
+train_data_source['img'] = [TRAIN_IMGS_BASE_PATH + str(id) + '.Bmp' for id in train_data_source['ID'].values]
+train_data_img_list = []
+for img_path in train_data_source['img']:
+    img = image.imread(img_path)
+    data = np.asarray(img)
+    if data.shape != (20,20,3):
+        data = np.repeat(data[:, :, np.newaxis], 3, axis=2)
+    train_data_img_list.append(data)
+train_data_img = np.asarray(train_data_img_list, dtype=np.uint8)
+train_data_label = LABEL_IDX
+datagen = ImageDataGenerator(
+          width_shift_range=0.2,
+          height_shift_range=0.2,
+          rescale=1./255,
+          zoom_range=0.2,
+          fill_mode='nearest')
+
+X_train, X_val, Y_train, Y_val = train_test_split(train_data_img, train_data_label, test_size=0.2, random_state=213)
+
+model = Sequential([
+    layers.Conv2D(32, kernel_size=(3, 3), activation='relu', input_shape=(20, 20, 3)),
+    layers.Conv2D(64,  kernel_size=(3, 3), activation='relu'),
+    layers.Conv2D(128,  kernel_size=(3, 3), activation='relu'),
+    layers.MaxPooling2D(pool_size = (2, 2)),
+    layers.Dropout(0.25),
+    layers.Flatten(),
+    layers.Dense(1024, activation='relu'),
+    layers.Dropout(0.25, seed=213),
+    layers.Dense(unique_labels_count, activation='softmax')
+])
+
+model.compile(optimizer='Adam', loss="sparse_categorical_crossentropy", metrics=['accuracy'])
+
+callbacks = [tf.keras.callbacks.EarlyStopping(patience=100, monitor='accuracy')]
+
+history = model.fit(datagen.flow(X_train, Y_train, batch_size=6000),
+                    validation_data=datagen.flow(X_val, Y_val, batch_size=6000), 
+                    batch_size=6000, epochs=2000, callbacks=callbacks)
+
+hist = pd.DataFrame(history.history)
+hist['epoch'] = history.epoch
+
+
+test_imgs = []
+names = []
+for dirname, _, filenames in os.walk(TEST_IMGS_BASE_PATH):
+    for filename in filenames:
+        test_imgs.append(os.path.join(dirname, filename))
+        names.append(os.path.splitext(filename)[0])
+test_imgs = np.array(test_imgs)
+names = np.array(names)
+
+test_data_img_list = []
+for img_path in test_imgs:
+    img = image.imread(img_path)
+    data = np.asarray(img)
+    if data.shape != (20,20,3):
+        data = np.repeat(data[:, :, np.newaxis], 3, axis=2)
+    data = data / 255.
+    test_data_img_list.append(data)
+    
+test_data_img = np.asarray(test_data_img_list)
+
+predictions = model.predict(test_data_img)
+
+results = []
+test = []
+for i in range(0, len(predictions)):
+    results.append(UNIQUE_LABELS[np.argmax(predictions[i])])
+    test.append(np.argmax(predictions[i]))
+
+final_df = pd.DataFrame(results, columns=['Class'])
+final_df['ID'] = names
+final_df.to_csv('final.csv', index=False)
